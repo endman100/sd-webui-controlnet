@@ -99,6 +99,7 @@ cn_preprocessor_modules = {
     "tile_colorfix+sharp": identity,
     "recolor_luminance": recolor_luminance,
     "recolor_intensity": recolor_intensity,
+    "recolor_relight": recolor_relight,
 }
 
 cn_preprocessor_unloadable = {

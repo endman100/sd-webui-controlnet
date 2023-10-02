@@ -677,6 +677,7 @@ class Script(scripts.Script, metaclass=(
 
         self.latest_model_hash = p.sd_model.sd_model_hash
         for idx, unit in enumerate(self.enabled_units):
+            print("unit.model", unit.model)
             Script.bound_check_params(unit)
 
             resize_mode = external_code.resize_mode_from_value(unit.resize_mode)
@@ -927,6 +928,31 @@ class Script(scripts.Script, metaclass=(
                         return y
 
                     post_processors.append(recolor_intensity_post_processing)
+
+                if 'relight' in unit.module:
+                    final_feed = hr_control if hr_control is not None else control
+                    final_feed = final_feed.permute(0, 2, 3, 1)[0]
+                    final_feed = final_feed.detach().cpu().numpy()
+                    final_feed = np.ascontiguousarray(final_feed).copy()
+                    final_feed = (final_feed * 255).clip(0, 255).astype(np.uint8) #(3, 800, 600)
+                    final_feed_hsv = cv2.cvtColor(final_feed, cv2.COLOR_RGB2HSV) #(3, 800, 600)
+
+                    def recolor_relight_post_processing(x):
+                        C, H, W = x.shape
+                        if Hfeed != H or Wfeed != W or C != 3:
+                            logger.error('Error: ControlNet find post-processing resolution mismatch. This could be related to other extensions hacked processing.')
+                            return x
+                        img = x.detach().cpu().numpy().transpose((1, 2, 0))
+                        img = (img * 255).clip(0, 255).astype(np.uint8)
+                        img_HLS = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
+                        img_HLS[:, :, 0] = final_feed_hsv[:, :, 0]
+                        img_HLS[:, :, 2] = final_feed_hsv[:, :, 2]
+                        img = cv2.cvtColor(img_HLS, cv2.COLOR_HLS2RGB)
+                        img = (img.astype(np.float32) / 255.0).transpose((2, 0, 1))
+                        y = torch.from_numpy(img).clip(0, 1).to(x)
+                        return x
+
+                    post_processors.append(recolor_relight_post_processing)
 
             if '+lama' in unit.module:
                 forward_param.used_hint_cond_latent = hook.UnetHook.call_vae_using_process(p, control)

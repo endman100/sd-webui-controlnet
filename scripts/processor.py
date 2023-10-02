@@ -612,6 +612,12 @@ def recolor_intensity(img, res=512, thr_a=1.0, **kwargs):
     result = cv2.cvtColor(result, cv2.COLOR_GRAY2RGB)
     return result, True
 
+def recolor_relight(img, res=512, thr_a=1.0, **kwargs):
+    result_HLS = cv2.cvtColor(HWC3(img), cv2.COLOR_BGR2HLS)
+    result_HLS[:,:,1] = 128
+    result = cv2.cvtColor(result_HLS, cv2.COLOR_HLS2BGR)
+    return result, True
+
 
 model_free_preprocessors = [
     "reference_only",
