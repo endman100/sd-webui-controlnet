@@ -987,19 +987,30 @@ class Script(scripts.Script, metaclass=(
         self.detected_map = detected_maps
         self.post_processors = post_processors
 
+    def controlnet_hack(self, p):
+        t = time.time()
+        self.controlnet_main_entry(p)
+        if len(self.enabled_units) > 0:
+            logger.info(f'ControlNet Hooked - Time = {time.time() - t}')
+        return
+
+    @staticmethod
+    def process_has_sdxl_refiner(p):
+        return getattr(p, 'refiner_checkpoint', None) is not None
+
+    def process(self, p, *args, **kwargs):
+        if not Script.process_has_sdxl_refiner(p):
+            self.controlnet_hack(p)
+        return
+
     def before_process_batch(self, p, *args, **kwargs):
         if self.noise_modifier is not None:
             p.rng = HackedImageRNG(rng=p.rng,
                                    noise_modifier=self.noise_modifier,
                                    sd_model=p.sd_model)
         self.noise_modifier = None
-
-        t = time.time()
-        self.controlnet_main_entry(p)
-
-        if len(self.enabled_units) > 0:
-            logger.info(f'ControlNet Hooked - Time = {time.time() - t}')
-
+        if Script.process_has_sdxl_refiner(p):
+            self.controlnet_hack(p)
         return
 
     def postprocess_batch(self, p, *args, **kwargs):

@@ -619,6 +619,13 @@ def recolor_relight(img, res=512, thr_a=1.0, **kwargs):
     return result, True
 
 
+def blur_gaussian(img, res=512, thr_a=1.0, **kwargs):
+    img, remove_pad = resize_image_with_pad(img, res)
+    img = remove_pad(img)
+    result = cv2.GaussianBlur(img, (0, 0), float(thr_a))
+    return result, True
+
+
 model_free_preprocessors = [
     "reference_only",
     "reference_adain",
@@ -853,6 +860,20 @@ preprocessor_sliders_config = {
             "value": 32,
         }
     ],
+    "blur_gaussian": [
+        {
+            "name": flag_preprocessor_resolution,
+            "value": 512,
+            "min": 64,
+            "max": 2048
+        },
+        {
+            "name": "Sigma",
+            "min": 0.01,
+            "max": 64.0,
+            "value": 9.0,
+        }
+    ],
     "tile_resample": [
         None,
         {
@@ -985,7 +1006,7 @@ preprocessor_filters = {
     "Scribble/Sketch": "scribble_pidinet",
     "Segmentation": "seg_ofade20k",
     "Shuffle": "shuffle",
-    "Tile": "tile_resample",
+    "Tile/Blur": "tile_resample",
     "Inpaint": "inpaint_only",
     "InstructP2P": "none",
     "Reference": "reference_only",
@@ -1001,5 +1022,6 @@ preprocessor_filters_aliases = {
     'normalmap': ['normal'],
     't2i-adapter': ['t2i_adapter', 't2iadapter', 't2ia'],
     'ip-adapter': ['ip_adapter', 'ipadapter'],
-    'scribble/sketch': ['scribble', 'sketch']
+    'scribble/sketch': ['scribble', 'sketch'],
+    'tile/blur': ['tile', 'blur']
 }  # must use all lower texts
