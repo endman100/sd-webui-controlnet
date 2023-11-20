@@ -62,7 +62,6 @@ class UiControlNetUnit(external_code.ControlNetUnit):
 
 
 class ControlNetUiGroup(object):
-    # Note: Change symbol hints mapping in `javascript/hints.js` when you change the symbol values.
     refresh_symbol = "\U0001f504"  # 🔄
     switch_values_symbol = "\U000021C5"  # ⇅
     camera_symbol = "\U0001F4F7"  # 📷
@@ -70,6 +69,15 @@ class ControlNetUiGroup(object):
     tossup_symbol = "\u2934"
     trigger_symbol = "\U0001F4A5"  # 💥
     open_symbol = "\U0001F4DD"  # 📝
+
+    tooltips = {
+        '🔄': 'Refresh',
+        '\u2934': 'Send dimensions to stable diffusion',
+        '💥': 'Run preprocessor',
+        '📝': 'Open new canvas',
+        '📷': 'Enable webcam',
+        '⇄': 'Mirror webcam',
+    }
 
     global_batch_input_dir = gr.Textbox(
         label="Controlnet input directory",
@@ -92,11 +100,9 @@ class ControlNetUiGroup(object):
 
     def __init__(
         self,
-        gradio_compat: bool,
         default_unit: external_code.ControlNetUnit,
         preprocessors: List[Callable],
     ):
-        self.gradio_compat = gradio_compat
         self.default_unit = default_unit
         self.preprocessors = preprocessors
         self.webcam_enabled = False
@@ -142,6 +148,7 @@ class ControlNetUiGroup(object):
         self.preset_panel = None
         self.upload_independent_img_in_img2img = None
         self.image_upload_panel = None
+        self.save_detected_map = None
 
         # Internal states for UI state pasting.
         self.prevent_next_n_module_update = 0
@@ -160,6 +167,7 @@ class ControlNetUiGroup(object):
             None
         """
         with gr.Group(visible=not is_img2img) as self.image_upload_panel:
+            self.save_detected_map = gr.Checkbox(value=True, visible=False)
             with gr.Tabs():
                 with gr.Tab(label="Single Image") as self.upload_tab:
                     with gr.Row(elem_classes=["cnet-image-row"], equal_height=True):
@@ -246,18 +254,22 @@ class ControlNetUiGroup(object):
                 self.open_new_canvas_button = ToolButton(
                     value=ControlNetUiGroup.open_symbol,
                     elem_id=f"{elem_id_tabname}_{tabname}_controlnet_open_new_canvas_button",
+                    tooltip=ControlNetUiGroup.tooltips[ControlNetUiGroup.open_symbol],
                 )
                 self.webcam_enable = ToolButton(
                     value=ControlNetUiGroup.camera_symbol,
                     elem_id=f"{elem_id_tabname}_{tabname}_controlnet_webcam_enable",
+                    tooltip=ControlNetUiGroup.tooltips[ControlNetUiGroup.camera_symbol],
                 )
                 self.webcam_mirror = ToolButton(
                     value=ControlNetUiGroup.reverse_symbol,
                     elem_id=f"{elem_id_tabname}_{tabname}_controlnet_webcam_mirror",
+                    tooltip=ControlNetUiGroup.tooltips[ControlNetUiGroup.reverse_symbol],
                 )
                 self.send_dimen_button = ToolButton(
                     value=ControlNetUiGroup.tossup_symbol,
                     elem_id=f"{elem_id_tabname}_{tabname}_controlnet_send_dimen_button",
+                    tooltip=ControlNetUiGroup.tooltips[ControlNetUiGroup.tossup_symbol],
                 )
 
         with FormRow(elem_classes=["controlnet_main_options"]):
@@ -301,15 +313,14 @@ class ControlNetUiGroup(object):
             else:
                 self.upload_independent_img_in_img2img = None
 
-        if not shared.opts.data.get("controlnet_disable_control_type", False):
-            with gr.Row(elem_classes=["controlnet_control_type", "controlnet_row"]):
-                self.type_filter = gr.Radio(
-                    list(preprocessor_filters.keys()),
-                    label=f"Control Type",
-                    value="All",
-                    elem_id=f"{elem_id_tabname}_{tabname}_controlnet_type_filter_radio",
-                    elem_classes="controlnet_control_type_filter_group",
-                )
+        with gr.Row(elem_classes=["controlnet_control_type", "controlnet_row"]):
+            self.type_filter = gr.Radio(
+                list(preprocessor_filters.keys()),
+                label=f"Control Type",
+                value="All",
+                elem_id=f"{elem_id_tabname}_{tabname}_controlnet_type_filter_radio",
+                elem_classes="controlnet_control_type_filter_group",
+            )
 
         with gr.Row(elem_classes=["controlnet_preprocessor_model", "controlnet_row"]):
             self.module = gr.Dropdown(
@@ -323,6 +334,7 @@ class ControlNetUiGroup(object):
                 visible=not is_img2img,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_trigger_preprocessor",
                 elem_classes=["cnet-run-preprocessor"],
+                tooltip=ControlNetUiGroup.tooltips[ControlNetUiGroup.trigger_symbol],
             )
             self.model = gr.Dropdown(
                 list(global_state.cn_models.keys()),
@@ -333,6 +345,7 @@ class ControlNetUiGroup(object):
             self.refresh_models = ToolButton(
                 value=ControlNetUiGroup.refresh_symbol,
                 elem_id=f"{elem_id_tabname}_{tabname}_controlnet_refresh_models",
+                tooltip=ControlNetUiGroup.tooltips[ControlNetUiGroup.refresh_symbol],
             )
 
         with gr.Row(elem_classes=["controlnet_weight_steps", "controlnet_row"]):
@@ -489,9 +502,6 @@ class ControlNetUiGroup(object):
         self.refresh_models.click(refresh_all_models, self.model, self.model, show_progress=False)
 
     def register_build_sliders(self):
-        if not self.gradio_compat:
-            return
-
         def build_sliders(module: str, pp: bool):
             logger.debug(
                 f"Prevent update slider value: {self.prevent_next_n_slider_value_update}"
@@ -588,40 +598,38 @@ class ControlNetUiGroup(object):
         self.module.change(build_sliders, inputs=inputs, outputs=outputs, show_progress=False)
         self.pixel_perfect.change(build_sliders, inputs=inputs, outputs=outputs, show_progress=False)
 
-        if self.type_filter is not None:
+        def filter_selected(k: str):
+            logger.debug(f"Prevent update {self.prevent_next_n_module_update}")
+            logger.debug(f"Switch to control type {k}")
+            (
+                filtered_preprocessor_list,
+                filtered_model_list,
+                default_option,
+                default_model,
+            ) = global_state.select_control_type(k, global_state.get_sd_version())
 
-            def filter_selected(k: str):
-                logger.debug(f"Prevent update {self.prevent_next_n_module_update}")
-                logger.debug(f"Switch to control type {k}")
-                (
-                    filtered_preprocessor_list,
-                    filtered_model_list,
-                    default_option,
-                    default_model,
-                ) = global_state.select_control_type(k)
+            if self.prevent_next_n_module_update > 0:
+                self.prevent_next_n_module_update -= 1
+                return [
+                    gr.Dropdown.update(choices=filtered_preprocessor_list),
+                    gr.Dropdown.update(choices=filtered_model_list),
+                ]
+            else:
+                return [
+                    gr.Dropdown.update(
+                        value=default_option, choices=filtered_preprocessor_list
+                    ),
+                    gr.Dropdown.update(
+                        value=default_model, choices=filtered_model_list
+                    ),
+                ]
 
-                if self.prevent_next_n_module_update > 0:
-                    self.prevent_next_n_module_update -= 1
-                    return [
-                        gr.Dropdown.update(choices=filtered_preprocessor_list),
-                        gr.Dropdown.update(choices=filtered_model_list),
-                    ]
-                else:
-                    return [
-                        gr.Dropdown.update(
-                            value=default_option, choices=filtered_preprocessor_list
-                        ),
-                        gr.Dropdown.update(
-                            value=default_model, choices=filtered_model_list
-                        ),
-                    ]
-
-            self.type_filter.change(
-                filter_selected,
-                inputs=[self.type_filter],
-                outputs=[self.module, self.model],
-                show_progress=False
-            )
+        self.type_filter.change(
+            filter_selected,
+            inputs=[self.type_filter],
+            outputs=[self.module, self.model],
+            show_progress=False
+        )
 
     def register_run_annotator(self, is_img2img: bool):
         def run_annotator(image, module, pres, pthr_a, pthr_b, t2i_w, t2i_h, pp, rm):
@@ -824,6 +832,7 @@ class ControlNetUiGroup(object):
         self.openpose_editor.register_callbacks(
             self.generated_image, self.use_preview_as_input
         )
+        assert self.type_filter is not None
         self.preset_panel.register_callbacks(
             self,
             self.type_filter,

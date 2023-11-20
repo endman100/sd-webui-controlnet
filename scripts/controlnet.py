@@ -19,7 +19,8 @@ from scripts.adapter import Adapter, StyleAdapter, Adapter_light
 from scripts.controlnet_lllite import PlugableControlLLLite, clear_all_lllite
 from scripts.controlmodel_ipadapter import PlugableIPAdapter, clear_all_ip_adapter
 from scripts.utils import load_state_dict, get_unique_axis0
-from scripts.hook import ControlParams, UnetHook, ControlModelType, HackedImageRNG
+from scripts.hook import ControlParams, UnetHook, HackedImageRNG
+from scripts.enums import ControlModelType, StableDiffusionVersion
 from scripts.controlnet_ui.controlnet_ui_group import ControlNetUiGroup, UiControlNetUnit
 from scripts.logging import logger
 from modules.processing import StableDiffusionProcessingImg2Img, StableDiffusionProcessingTxt2Img
@@ -35,16 +36,6 @@ from PIL import Image, ImageFilter, ImageOps
 from scripts.lvminthin import lvmin_thin, nake_nms
 from scripts.processor import model_free_preprocessors
 from scripts.controlnet_model_guess import build_model_by_guess
-
-
-gradio_compat = True
-try:
-    from distutils.version import LooseVersion
-    from importlib_metadata import version
-    if LooseVersion(version("gradio")) < LooseVersion("3.10"):
-        gradio_compat = False
-except ImportError:
-    pass
 
 
 # Gradio 3.32 bug fix
@@ -260,7 +251,6 @@ class Script(scripts.Script, metaclass=(
 
     def uigroup(self, tabname: str, is_img2img: bool, elem_id_tabname: str) -> Tuple[ControlNetUiGroup, gr.State]:
         group = ControlNetUiGroup(
-            gradio_compat,
             Script.get_default_ui_unit(),
             self.preprocessor,
         )
@@ -637,6 +627,27 @@ class Script(scripts.Script, metaclass=(
                 setattr(unit, param, default_value)
                 logger.warning(f'[{unit.module}.{param}] Invalid value({value}), using default value {default_value}.')
 
+    def check_sd_version_compatible(unit: external_code.ControlNetUnit) -> None:
+        """
+        Checks whether the given ControlNet unit has model compatible with the currently 
+        active sd model. An exception is thrown if ControlNet unit is detected to be
+        incompatible.
+        """
+        # No need to check if the ControlModelType does not require model to be present.
+        if unit.model.lower() == "none":
+            return
+
+        sd_version = global_state.get_sd_version()
+        assert sd_version != StableDiffusionVersion.UNKNOWN
+        cnet_sd_version = StableDiffusionVersion.detect_from_model_name(unit.model)
+        
+        if cnet_sd_version == StableDiffusionVersion.UNKNOWN:
+            logger.warn(f"Unable to determine version for ControlNet model '{unit.model}'.")
+            return
+
+        if sd_version != cnet_sd_version:
+            raise Exception(f"ControlNet model {unit.model}({cnet_sd_version}) is not compatible with sd model({sd_version})")
+
     def controlnet_main_entry(self, p):
         sd_ldm = p.sd_model
         unet = sd_ldm.model.diffusion_model
@@ -679,6 +690,7 @@ class Script(scripts.Script, metaclass=(
         for idx, unit in enumerate(self.enabled_units):
             print("unit.model", unit.model)
             Script.bound_check_params(unit)
+            Script.check_sd_version_compatible(unit)
 
             resize_mode = external_code.resize_mode_from_value(unit.resize_mode)
             control_mode = external_code.control_mode_from_value(unit.control_mode)
@@ -812,11 +824,15 @@ class Script(scripts.Script, metaclass=(
                 thr_a=unit.threshold_a,
                 thr_b=unit.threshold_b,
             )
-
+            
+            def store_detected_map(detected_map, module: str) -> None:
+                if unit.save_detected_map:
+                    detected_maps.append((detected_map, module))
+            
             if high_res_fix:
                 if is_image:
                     hr_control, hr_detected_map = Script.detectmap_proc(detected_map, unit.module, resize_mode, hr_y, hr_x)
-                    detected_maps.append((hr_detected_map, unit.module))
+                    store_detected_map(hr_detected_map, unit.module)
                 else:
                     hr_control = detected_map
             else:
@@ -824,10 +840,10 @@ class Script(scripts.Script, metaclass=(
 
             if is_image:
                 control, detected_map = Script.detectmap_proc(detected_map, unit.module, resize_mode, h, w)
-                detected_maps.append((detected_map, unit.module))
+                store_detected_map(detected_map, unit.module)
             else:
                 control = detected_map
-                detected_maps.append((input_image, unit.module))
+                store_detected_map(input_image, unit.module)
 
             if control_model_type == ControlModelType.T2I_StyleAdapter:
                 control = control['last_hidden_state']
@@ -1132,8 +1148,6 @@ def on_ui_settings():
         False, "Show batch images in gradio gallery output", gr.Checkbox, {"interactive": True}, section=section))
     shared.opts.add_option("controlnet_increment_seed_during_batch", shared.OptionInfo(
         False, "Increment seed after each controlnet batch iteration", gr.Checkbox, {"interactive": True}, section=section))
-    shared.opts.add_option("controlnet_disable_control_type", shared.OptionInfo(
-        False, "Disable control type selection", gr.Checkbox, {"interactive": True}, section=section))
     shared.opts.add_option("controlnet_disable_openpose_edit", shared.OptionInfo(
         False, "Disable openpose edit", gr.Checkbox, {"interactive": True}, section=section))
     shared.opts.add_option("controlnet_ignore_noninpaint_mask", shared.OptionInfo(
